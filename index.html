@@ -145,6 +145,9 @@
   .audit-item .ai-action{font-size:12px;font-weight:600;}
   .audit-item .ai-time{font-size:10px;color:var(--ink-soft);margin-top:2px;}
   .empty-note{font-size:11px;color:var(--ink-soft);text-align:center;padding:20px 10px;}
+  .audit-row{display:flex;justify-content:space-between;align-items:center;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:9px 12px;margin-bottom:6px;font-size:10.5px;gap:8px;}
+  .audit-row .a-cmd{font-weight:700;color:var(--ink);}
+  .audit-row .a-time{color:var(--ink-soft);font-size:9.5px;flex-shrink:0;}
 
   /* TICKETS */
   .cat-row{display:flex;gap:7px;margin-bottom:14px;overflow-x:auto;}
@@ -314,6 +317,8 @@
         <button data-outil="scanticket" onclick="showOutil('scanticket')">Scan ticket</button>
         <button data-outil="presse" onclick="showOutil('presse')">Presse</button>
         <button data-outil="crypto" onclick="showOutil('crypto')">Hash/Chiffrement</button>
+        <button data-outil="droit" onclick="showOutil('droit')">Droit & Preuves</button>
+        <button data-outil="blockchain" onclick="showOutil('blockchain')">Blockchain</button>
       </div>
 
       <!-- ===== ABAFUSION / WEBHOOK ===== -->
@@ -390,7 +395,13 @@
           <div class="status-line"><span>Minuterie</span><span class="state-pill" id="timerPill">INACTIVE</span></div>
 
           <div class="status-line"><span>Connexion ESP32</span><span class="state-pill pending" id="espStatusPill">Déconnecté</span></div>
-          <div class="honest-note"><b>🔴 ESP32 sans Wi-Fi, USB uniquement :</b> cette carte ne se connecte à aucun réseau. Un appui sur le bouton BTN1 (à côté du logo Wi-Fi imprimé) envoie juste un signal par le câble USB — c'est le <u>téléphone</u>, avec sa propre connexion internet (Wi-Fi/4G), qui envoie réellement à AbaFusion à ce moment-là. Ça marche donc uniquement si le téléphone est connecté à internet ET l'ESP32 branché en USB avec cette page ouverte. <b>Aucun CORS possible</b> ici puisque tout passe par USB + le proxy déjà configuré dans l'onglet AbaFusion. <b>Limite matérielle :</b> si le capteur température n'est pas détecté au démarrage (message série "TEMP_SENSOR:NON_DETECTE"), vérifie le branchement I2C (SDA/SCL). <b>Limite navigateur :</b> Web Serial fonctionne sur Chrome/Edge desktop et Android — pas sur Safari/iOS.</div>
+          <div class="honest-note"><b>🔴 ESP32 sans Wi-Fi, USB uniquement :</b> cette carte ne se connecte à aucun réseau. Un appui sur le bouton BTN1 (à côté du logo Wi-Fi imprimé) envoie juste un signal par le câble USB — c'est le <u>téléphone</u>, avec sa propre connexion internet (Wi-Fi/4G), qui envoie réellement à AbaFusion à ce moment-là. <b>Important :</b> chaque commande (LED, buzzer, alarme…) est automatiquement transmise à AbaFusion — mais ça ne marche que si l'URL du webhook et le proxy sont correctement configurés dans l'onglet AbaFusion (vérifie là-bas en premier si la synchro semble muette). <b>Limite matérielle :</b> si le capteur température n'est pas détecté au démarrage (message série "TEMP_SENSOR:NON_DETECTE"), vérifie le branchement I2C (SDA/SCL). <b>Limite navigateur :</b> Web Serial fonctionne sur Chrome/Edge desktop et Android — pas sur Safari/iOS.</div>
+        </div>
+
+        <div class="tool-card">
+          <div class="tool-head"><div class="tool-title">📋 Registre de traçabilité (ESP32)</div></div>
+          <div class="tool-sub">Chaque commande envoyée à la carte, avec horodatage réel.</div>
+          <div id="espTraceLog"></div>
         </div>
       </div>
 
@@ -415,6 +426,10 @@
             <button class="tool-btn primary" onclick="captureFace()">✅ Capturer / Vérifier</button>
           </div>
           <div class="scan-result" id="faceResult"></div>
+          <label class="tool-label" style="margin-top:14px">URL du proxy Azure Face (optionnel — voir azure-face-proxy-worker.js)</label>
+          <input class="tool-input" id="azureFaceProxy" placeholder="https://azure-face-proxy.xxx.workers.dev">
+          <button class="tool-btn primary" onclick="identifyViaAzure()" style="margin-top:8px">🧠 Identifier le visage via Azure Face</button>
+          <div class="scan-result" id="azureResult"></div>
           <div class="honest-note"><b>Ce que fait réellement ce module :</b> il capture une vraie photo via ta caméra et détecte si un visage est présent dans le cadre (liveness basique). <b>Ce qu'il ne fait pas :</b> il ne reconnaît pas l'identité d'une personne parmi plusieurs (ça demanderait un moteur de reconnaissance faciale entraîné + une base de visages de référence, hors de portée d'une page web seule). Si tu as besoin de vraie identification 1-vers-N, il faut un service dédié (AWS Rekognition, Azure Face, etc.) — dis-le-moi et je peux préparer l'intégration.</div>
         </div>
       </div>
@@ -465,14 +480,33 @@
       <!-- ===== PRESSE ===== -->
       <div class="outil-panel" id="outil-presse">
         <div class="tool-card">
-          <div class="tool-head"><div class="tool-title">📣 Communication — Presse</div></div>
-          <div class="tool-sub">Envoi réel via WhatsApp (ouvre une vraie conversation) et par email.</div>
+          <div class="tool-head"><div class="tool-title">📣 Communication — Presse</div><span class="sim-badge pending" id="pressStatusBadge">BROUILLON</span></div>
+          <div class="tool-sub">Type d'incident, gravité, puis génération d'un message prêt à envoyer.</div>
 
-          <label class="tool-label">Numéro WhatsApp (avec indicatif, ex: 2126xxxxxxxx)</label>
+          <label class="tool-label">Type d'incident</label>
+          <div class="chip-select">
+            <button class="mini-chip active" data-inc="Faux site" onclick="setIncidentType('Faux site', this)">Faux site</button>
+            <button class="mini-chip" data-inc="Faux billet" onclick="setIncidentType('Faux billet', this)">Faux billet</button>
+            <button class="mini-chip" data-inc="Phishing" onclick="setIncidentType('Phishing', this)">Phishing</button>
+            <button class="mini-chip" data-inc="Fraude" onclick="setIncidentType('Fraude', this)">Fraude</button>
+            <button class="mini-chip" data-inc="Cyberattaque" onclick="setIncidentType('Cyberattaque', this)">Cyberattaque</button>
+          </div>
+          <label class="tool-label">Gravité</label>
+          <select class="tool-input" id="pressSeverity"><option value="LOW">Faible</option><option value="MEDIUM" selected>Moyenne</option><option value="HIGH">Élevée</option><option value="CRITICAL">Critique</option></select>
+          <label class="tool-label">Résumé court de l'incident</label>
+          <input class="tool-input" id="pressSummary" placeholder="Ex : Site frauduleux imitant la billetterie officielle">
+          <button class="tool-btn ghost" onclick="generatePressMessage()" style="margin-top:8px">📝 Générer le message</button>
+          <label class="tool-label" style="margin-top:10px">Message (modifiable avant envoi)</label>
+          <textarea class="tool-input" id="pressGeneratedMsg" style="height:90px">Le message généré apparaîtra ici...</textarea>
+          <button class="tool-btn primary" onclick="approvePressMessage()">✅ Approuver</button>
+          <div class="honest-note" style="margin-top:8px"><b>Génération :</b> composée à partir d'un modèle local (type + gravité + résumé), pas un appel à un vrai modèle d'IA externe — modifie librement le texte avant d'envoyer. Une fois "Approuvé", utilise WhatsApp/Email ci-dessous ou les canaux presse pour l'envoyer réellement.</div>
+
+          <label class="tool-label" style="margin-top:16px">Numéro WhatsApp (avec indicatif, ex: 2126xxxxxxxx)</label>
           <input class="tool-input" id="waNumber" placeholder="212600000000">
           <label class="tool-label">Message</label>
           <textarea class="tool-input" id="waMessage">Alerte SafeStade Pro : anomalie détectée, merci de vérifier.</textarea>
           <button class="tool-btn green" onclick="sendWhatsApp()">🟢 Envoyer sur WhatsApp</button>
+          <div id="waFallback" style="margin-top:6px;font-size:11px"></div>
 
           <label class="tool-label" style="margin-top:16px">Email destinataire</label>
           <input class="tool-input" id="mailTo" placeholder="contact@exemple.com">
@@ -480,9 +514,21 @@
           <input class="tool-input" id="mailSubject" value="Alerte SafeStade Pro">
           <label class="tool-label">Message</label>
           <textarea class="tool-input" id="mailBody">Une anomalie a été détectée par SafeStade Pro. Merci de vérifier le tableau de bord.</textarea>
-          <button class="tool-btn primary" onclick="sendEmail()">✉️ Envoyer l'email</button>
+          <button class="tool-btn primary" onclick="sendEmail()">✉️ Envoyer via Gmail (recommandé)</button>
+          <button class="tool-btn ghost" onclick="sendEmailViaMailto()">Envoyer via mon client mail installé</button>
 
-          <div class="honest-note"><b>WhatsApp :</b> ouvre une vraie conversation WhatsApp (app ou web) avec le numéro et message pré-remplis — l'envoi final se fait d'un vrai clic dans WhatsApp, comportement normal et volontaire (aucune app tierce ne peut envoyer un WhatsApp à ta place sans ton clic). <b>Email :</b> ouvre ton vrai client mail (Gmail, Outlook…) avec le message prêt à envoyer. <b>Synchronisation AbaFusion :</b> chaque envoi WhatsApp ou email est automatiquement transmis à AbaFusion — via l'ESP32 en USB s'il est connecté (aucun CORS), sinon via le webhook/proxy du navigateur.</div>
+          <div class="honest-note"><b>WhatsApp :</b> ouvre une vraie conversation WhatsApp (app ou web) avec le numéro et message pré-remplis — l'envoi final se fait d'un vrai clic dans WhatsApp, comportement normal et volontaire (aucune app tierce ne peut envoyer un WhatsApp à ta place sans ton clic). <b>Email :</b> ouvre Gmail web (ou ton client installé) avec le message prêt à envoyer. <b>Synchronisation AbaFusion :</b> chaque envoi WhatsApp ou email est automatiquement transmis à AbaFusion.</div>
+
+          <label class="tool-label" style="margin-top:16px">Canaux presse marocains (contact manuel)</label>
+          <div class="press-grid">
+            <button class="press-btn" onclick="openPressChannel('https://www.hespress.com/contact')">Hespress</button>
+            <button class="press-btn" onclick="openPressChannel('https://choftv.ma/contact/')">Chouf TV</button>
+            <button class="press-btn" onclick="openPressChannel('https://www.le360.ma/contact')">Le360</button>
+            <button class="press-btn" onclick="openPressChannel('https://medi1tv.com/contact')">Medi1 TV</button>
+          </div>
+          <label class="tool-label">Autorité nationale</label>
+          <button class="tool-btn primary" onclick="openPressChannel('https://www.dgssi.gov.ma')">🛡️ Notifier la DGSSI</button>
+          <div class="honest-note">Aucune API réelle connectée pour ces canaux — ces boutons ouvrent le site officiel réel de chacun dans un nouvel onglet, pour un contact manuel (rédaction ou signalement).</div>
         </div>
       </div>
 
@@ -527,6 +573,49 @@
           </div>
           <button class="tool-btn green" onclick="sendCipherEverywhere()" style="margin-top:10px">📤 Envoyer le chiffré — AbaFusion (ESP32) + WhatsApp + Email</button>
           <div class="honest-note"><b>Réel :</b> SHA-256 et AES-256-GCM = API native <code>Web Crypto</code>, pas une simulation. <b>Sécurité :</b> le texte en clair n'est jamais envoyé — seulement le hash ou le chiffré. <b>Limite technique honnête :</b> WhatsApp/email ont une limite de longueur de message — si le contenu chiffré est trop long, seul un extrait + la mention "texte complet envoyé à AbaFusion" partent par ces deux canaux ; AbaFusion, lui, reçoit toujours l'intégralité. Mot de passe perdu = contenu irrécupérable, pour tout le monde.</div>
+        </div>
+      </div>
+
+      <!-- ===== DROIT & PREUVES ===== -->
+      <div class="outil-panel" id="outil-droit">
+        <div class="tool-card">
+          <div class="tool-head"><div class="tool-title">⚖️ Chaîne de preuve numérique</div><span class="sim-badge on" id="chainBadge">Bloc n°0</span></div>
+          <div class="tool-sub">Empreinte SHA-256 + horodatage, chaque preuve référence la précédente (façon blockchain simplifiée) — infalsifiable sans casser la chaîne.</div>
+          <label class="tool-label">Description de la preuve (log, capture, fichier…)</label>
+          <textarea class="tool-input" id="proofDesc" style="height:70px" placeholder="Ex : Capture d'écran — tentative d'intrusion 10:41, IP 41.xxx.xxx.xxx"></textarea>
+          <button class="tool-btn primary" onclick="generateProofBlock()">🔗 Générer l'empreinte (hash)</button>
+          <div id="proofResult" class="status-line" style="display:none;flex-direction:column;align-items:flex-start;gap:4px"></div>
+          <button class="tool-btn green" onclick="sendLastProofToAbaFusion()" style="margin-top:8px">📤 Envoyer ce bloc à AbaFusion</button>
+
+          <label class="tool-label" style="margin-top:16px">Vérifier l'intégrité d'une preuve existante</label>
+          <textarea class="tool-input" id="verifyText" style="height:60px" placeholder="Recolle le texte original de la preuve..."></textarea>
+          <input class="tool-input" id="verifyHash" placeholder="Hash SHA-256 attendu (64 caractères)" style="margin-top:6px">
+          <button class="tool-btn ghost" onclick="verifyProofIntegrity()" style="margin-top:8px">Vérifier l'intégrité</button>
+          <div id="verifyResult" class="scan-result"></div>
+        </div>
+
+        <div class="tool-card">
+          <div class="tool-head"><div class="tool-title">📄 PV de signalement</div></div>
+          <div class="tool-sub">Génère un procès-verbal prêt à transmettre, protégé par une vraie confirmation biométrique.</div>
+          <label class="tool-label">Type d'infraction</label>
+          <select class="tool-input" id="pvType"><option>Cyberattaque / intrusion réseau</option><option>Fraude billetterie</option><option>Usurpation d'identité</option><option>Atteinte à la sécurité physique</option></select>
+          <label class="tool-label">Résumé des faits</label>
+          <textarea class="tool-input" id="pvFacts" style="height:80px" placeholder="Décrivez les faits constatés..."></textarea>
+          <button class="tool-btn primary" onclick="generatePV()">📝 Générer le PV (empreinte requise)</button>
+          <div id="pvResult" class="scan-result"></div>
+          <button class="tool-btn green" onclick="sendLastPVToAbaFusion()" style="margin-top:8px">📤 Envoyer ce PV à AbaFusion</button>
+          <div class="honest-note">La génération du PV exige une vérification biométrique réelle (WebAuthn, onglet Empreinte) avant de finaliser — sécurité à 2 facteurs, pas une simulation.</div>
+        </div>
+      </div>
+
+      <!-- ===== BLOCKCHAIN (registre local des preuves) ===== -->
+      <div class="outil-panel" id="outil-blockchain">
+        <div class="tool-card">
+          <div class="tool-head"><div class="tool-title">⛓️ Registre blockchain local</div><span class="sim-badge on">SHA-256 réel</span></div>
+          <div class="tool-sub">Chaque bloc référence le hash du précédent — modifier un bloc ancien casse toute la chaîne qui suit, ce qui rend la falsification détectable.</div>
+          <div id="blockchainLedger"></div>
+          <button class="tool-btn ghost" onclick="renderBlockchain()" style="margin-top:8px">Rafraîchir</button>
+          <div class="honest-note">Registre stocké localement sur cet appareil (pas distribué sur un vrai réseau blockchain) — pour une vraie décentralisation inter-organismes, il faudrait publier ces blocs sur un registre partagé (ex: via AbaFusion) plutôt qu'en local uniquement.</div>
         </div>
       </div>
 
@@ -856,6 +945,38 @@ function switchCamera(){
   toast('Bascule vers la caméra ' + (camFacing==='user'?'avant':'arrière') + '…');
   startCamera();
 }
+async function identifyViaAzure(){
+  const proxy = document.getElementById('azureFaceProxy').value.trim();
+  const resultBox = document.getElementById('azureResult');
+  if(!lastCapturedFaceDataUrl){ toast('Capture d\'abord une photo avec "Capturer / Vérifier"'); return; }
+  if(!proxy){ toast('Renseigne l\'URL du proxy Azure Face (voir azure-face-proxy-worker.js)', 5000); return; }
+  resultBox.className = 'scan-result valid';
+  resultBox.innerHTML = '<div class="sr-label">⏳ Analyse en cours…</div>';
+  try{
+    const res = await fetch(proxy, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ image: lastCapturedFaceDataUrl })
+    });
+    const data = await res.json();
+    if(Array.isArray(data) && data.length > 0){
+      const f = data[0];
+      resultBox.className = 'scan-result valid';
+      resultBox.innerHTML = '<div class="sr-label">✅ Visage analysé par Azure</div><div class="sr-meta">Âge estimé : '+(f.faceAttributes?.age||'?')+' · Genre : '+(f.faceAttributes?.gender||'?')+'</div>';
+      logAudit('Visage analysé via Azure Face');
+    } else if(Array.isArray(data) && data.length === 0){
+      resultBox.className = 'scan-result invalid';
+      resultBox.innerHTML = '<div class="sr-label">⚠️ Aucun visage détecté par Azure</div>';
+    } else {
+      resultBox.className = 'scan-result invalid';
+      resultBox.innerHTML = '<div class="sr-label">❌ Erreur Azure</div><div class="sr-meta">'+(data.error?.message || data.error || JSON.stringify(data)).toString().slice(0,150)+'</div>';
+    }
+  }catch(err){
+    resultBox.className = 'scan-result invalid';
+    resultBox.innerHTML = '<div class="sr-label">❌ Échec de connexion au proxy</div><div class="sr-meta">'+err.message+'</div>';
+  }
+}
+let lastCapturedFaceDataUrl = null;
 async function captureFace(){
   const video = document.getElementById('camVideo');
   const canvas = document.getElementById('camCanvas');
@@ -866,6 +987,7 @@ async function captureFace(){
   const ctx = canvas.getContext('2d');
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
   const dataUrl = canvas.toDataURL('image/png');
+  lastCapturedFaceDataUrl = dataUrl;
   img.src = dataUrl; img.style.display='block'; video.style.display='none';
 
   let faceDetected = null;
@@ -935,18 +1057,23 @@ async function enrollFingerprint(){
     toast('Échec de l\'enregistrement : ' + err.message, 4500);
   }
 }
+async function verifyFingerprintSilent(){
+  if(!fpCredentialId) throw new Error('Aucune empreinte enregistrée sur cet appareil');
+  await navigator.credentials.get({
+    publicKey:{
+      challenge: rnd(32),
+      allowCredentials:[{ id: Uint8Array.from(atob(fpCredentialId.replace(/-/g,'+').replace(/_/g,'/')), c=>c.charCodeAt(0)), type:'public-key' }],
+      userVerification:'required',
+      timeout:60000
+    }
+  });
+  return true;
+}
 async function verifyFingerprint(){
   const resultBox = document.getElementById('fpResult');
   if(!fpCredentialId){ toast('Enregistre d\'abord une empreinte'); return; }
   try{
-    await navigator.credentials.get({
-      publicKey:{
-        challenge: rnd(32),
-        allowCredentials:[{ id: Uint8Array.from(atob(fpCredentialId.replace(/-/g,'+').replace(/_/g,'/')), c=>c.charCodeAt(0)), type:'public-key' }],
-        userVerification:'required',
-        timeout:60000
-      }
-    });
+    await verifyFingerprintSilent();
     resultBox.className='scan-result valid';
     resultBox.innerHTML='<div class="sr-label">✅ Empreinte vérifiée</div><div class="sr-meta">Authentification confirmée par le capteur biométrique réel de l\'appareil.</div>';
     toast('Empreinte vérifiée avec succès');
@@ -958,13 +1085,57 @@ async function verifyFingerprint(){
 }
 
 /* ---------- PRESSE : WhatsApp + Email réels ---------- */
+/* ---------- PRESSE : type d'incident + génération de message (modèle local) ---------- */
+let currentIncidentType = 'Faux site';
+function setIncidentType(type, el){
+  currentIncidentType = type;
+  document.querySelectorAll('[data-inc]').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+}
+function generatePressMessage(){
+  const severity = document.getElementById('pressSeverity').value;
+  const summary = document.getElementById('pressSummary').value.trim() || 'incident en cours de vérification';
+  const severityLabel = {LOW:'faible',MEDIUM:'moyenne',HIGH:'élevée',CRITICAL:'critique'}[severity];
+  const msg = 'Alerte SafeStade — Type : ' + currentIncidentType + ' (gravité ' + severityLabel + ').\n\n'
+    + 'Résumé : ' + summary + '.\n\n'
+    + 'Merci de vérifier cette information et de nous contacter pour toute clarification. Ceci est une communication émise depuis la plateforme SafeStade.';
+  document.getElementById('pressGeneratedMsg').value = msg;
+  document.getElementById('waMessage').value = msg;
+  document.getElementById('mailBody').value = msg;
+  document.getElementById('mailSubject').value = 'Alerte SafeStade — ' + currentIncidentType;
+  document.getElementById('pressStatusBadge').textContent = 'BROUILLON';
+  document.getElementById('pressStatusBadge').className = 'sim-badge pending';
+  toast('Message généré — relis-le avant d\'approuver');
+}
+function approvePressMessage(){
+  const msg = document.getElementById('pressGeneratedMsg').value;
+  if(!msg.trim() || msg.includes('apparaîtra ici')){ toast('Génère d\'abord un message'); return; }
+  document.getElementById('waMessage').value = msg;
+  document.getElementById('mailBody').value = msg;
+  document.getElementById('pressStatusBadge').textContent = 'APPROUVÉ';
+  document.getElementById('pressStatusBadge').className = 'sim-badge on';
+  logAudit('Message presse approuvé : ' + currentIncidentType);
+  syncToAbaFusion('press_message_approved', { type: currentIncidentType, message: msg });
+  toast('Message approuvé — utilise WhatsApp/Email ci-dessous pour l\'envoyer');
+}
+function openPressChannel(url){
+  window.open(url, '_blank');
+  logAudit('Canal presse ouvert : ' + url);
+}
 function sendWhatsApp(){
   const num = document.getElementById('waNumber').value.replace(/[^0-9]/g,'');
   const msg = document.getElementById('waMessage').value;
   if(!num){ toast('Renseigne un numéro WhatsApp'); return; }
   const url = 'https://wa.me/' + num + '?text=' + encodeURIComponent(msg);
-  window.open(url, '_blank');
-  toast('Ouverture de WhatsApp…');
+  const win = window.open(url, '_blank');
+  if(!win || win.closed || typeof win.closed === 'undefined'){
+    // Popup bloqué par le navigateur : on affiche un vrai lien cliquable à la place
+    toast('Fenêtre bloquée — clique sur le lien affiché ci-dessous', 5000);
+    const box = document.getElementById('waFallback');
+    box.innerHTML = '<a href="'+url+'" target="_blank" style="color:var(--green-light);font-weight:700">👉 Ouvrir WhatsApp manuellement</a>';
+  } else {
+    toast('Ouverture de WhatsApp…');
+  }
   logAudit('WhatsApp ouvert vers ' + num);
   syncToAbaFusion('whatsapp_sent', { number: num, message: msg });
 }
@@ -973,11 +1144,20 @@ function sendEmail(){
   const subject = document.getElementById('mailSubject').value;
   const body = document.getElementById('mailBody').value;
   if(!to){ toast('Renseigne un destinataire'); return; }
-  const url = 'mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
-  window.location.href = url;
-  toast('Ouverture de ton client mail…');
-  logAudit('Email préparé vers ' + to);
+  // Gmail web direct : marche même sans client mail installé sur l'ordinateur (contrairement à mailto:)
+  const gmailUrl = 'https://mail.google.com/mail/?view=cm&fs=1&to='+encodeURIComponent(to)+'&su='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
+  window.open(gmailUrl, '_blank');
+  toast('Ouverture de Gmail (brouillon prêt à envoyer)…');
+  logAudit('Email préparé (Gmail web) vers ' + to);
   syncToAbaFusion('email_sent', { to, subject, body });
+}
+function sendEmailViaMailto(){
+  const to = document.getElementById('mailTo').value.trim();
+  const subject = document.getElementById('mailSubject').value;
+  const body = document.getElementById('mailBody').value;
+  if(!to){ toast('Renseigne un destinataire'); return; }
+  window.location.href = 'mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
+  toast('Ouverture de ton client mail installé…');
 }
 
 /* ---------- AUDIT (journal réel des actions, persisté) ---------- */
@@ -999,6 +1179,15 @@ function renderAudit(){
   const socEsp = document.getElementById('socEspStatus'); if(socEsp) socEsp.textContent = document.getElementById('dashEspStatus').textContent;
   const socLed = document.getElementById('socEspLed'); if(socLed) socLed.className = document.getElementById('espLed').className;
   const socWh = document.getElementById('socWebhookStatus'); if(socWh) socWh.textContent = document.getElementById('dashWebhookStatus').textContent;
+  renderEspTrace();
+}
+function renderEspTrace(){
+  const box = document.getElementById('espTraceLog');
+  if(!box) return;
+  const list = loadAudit().filter(a => a.action.startsWith('ESP32') || a.action.includes('BTN1') || a.action.includes('Minuterie') || a.action.includes('IR'));
+  box.innerHTML = list.length ? list.slice(0,15).map(a=>
+    '<div class="audit-row"><span class="a-cmd">ADMIN · ESP32-01 · '+a.action.replace('ESP32 (USB) : ','')+'</span><span class="a-time">'+a.time+'</span></div>'
+  ).join('') : '<div class="empty-note">Aucune commande envoyée pour l\'instant.</div>';
 }
 
 /* ---------- SECURITE (toggles réels, persistés) ---------- */
@@ -1120,7 +1309,7 @@ function stopTicketScan(){
   document.getElementById('scanTicketBadge').className='sim-badge pending';
 }
 function checkTicketCode(code){
-  code = (code||'').trim();
+  code = (code||'').trim().toUpperCase();
   if(!code) return;
   const resultBox = document.getElementById('ticketScanResult');
   const used = loadUsedTickets();
@@ -1150,6 +1339,7 @@ document.addEventListener('DOMContentLoaded', function(){
   renderSecurity();
   renderTickets();
   renderAudit();
+  renderBlockchain();
 });
 
 /* ---------- Synchronisation générique vers AbaFusion (ESP32/USB en priorité) ---------- */
@@ -1230,6 +1420,90 @@ async function decryptDoc(){
     logAudit('Document déchiffré (AES-256-GCM)');
   }catch(err){ toast('Échec du déchiffrement — mot de passe incorrect ou données corrompues', 5000); }
 }
+/* ---------- DROIT & PREUVES : chaîne de blocs SHA-256 réelle (façon blockchain) ---------- */
+function loadChain(){ try{ return JSON.parse(localStorage.getItem('ss_proof_chain')||'[]'); }catch(e){ return []; } }
+function saveChain(chain){ localStorage.setItem('ss_proof_chain', JSON.stringify(chain)); }
+let lastProofBlock = null;
+let lastPV = null;
+async function generateProofBlock(){
+  const desc = document.getElementById('proofDesc').value.trim();
+  if(!desc){ toast('Décris la preuve avant de générer l\'empreinte'); return; }
+  const chain = loadChain();
+  const prevHash = chain.length ? chain[chain.length-1].hash : '0'.repeat(64);
+  const timestamp = new Date().toISOString();
+  const blockContent = prevHash + '|' + desc + '|' + timestamp;
+  const hash = await sha256Hex(blockContent);
+  const block = { index: chain.length, desc, timestamp, prevHash, hash };
+  chain.push(block);
+  saveChain(chain);
+  document.getElementById('chainBadge').textContent = 'Bloc n°' + block.index;
+  const box = document.getElementById('proofResult');
+  box.style.display = 'flex';
+  box.innerHTML = '<span style="font-size:10px;color:var(--ink-soft)">Hash du bloc n°'+block.index+'</span><span style="font-family:monospace;font-size:10.5px;word-break:break-all">'+hash+'</span>';
+  document.getElementById('proofDesc').value = '';
+  lastProofBlock = block;
+  logAudit('Preuve ajoutée à la chaîne (bloc n°' + block.index + ')');
+  toast('Preuve ajoutée à la chaîne — bloc n°' + block.index + '. Clique "Envoyer à AbaFusion" pour la transmettre.');
+  renderBlockchain();
+}
+async function sendLastProofToAbaFusion(){
+  if(!lastProofBlock){ toast('Génère d\'abord un bloc de preuve'); return; }
+  await syncToAbaFusion('proof_block_added', lastProofBlock);
+  toast('Bloc n°' + lastProofBlock.index + ' envoyé à AbaFusion');
+}
+async function verifyProofIntegrity(){
+  const text = document.getElementById('verifyText').value;
+  const expected = document.getElementById('verifyHash').value.trim().toLowerCase();
+  const resultBox = document.getElementById('verifyResult');
+  if(!text || !expected){ toast('Renseigne le texte et le hash attendu'); return; }
+  const actual = await sha256Hex(text);
+  if(actual === expected){
+    resultBox.className = 'scan-result valid';
+    resultBox.innerHTML = '<div class="sr-label">✅ Intégrité confirmée</div><div class="sr-meta">Le hash correspond exactement — le texte n\'a pas été modifié.</div>';
+  } else {
+    resultBox.className = 'scan-result invalid';
+    resultBox.innerHTML = '<div class="sr-label">❌ Intégrité compromise</div><div class="sr-meta">Le hash calculé ('+actual.slice(0,16)+'…) ne correspond pas — le texte a été modifié ou le hash attendu est incorrect.</div>';
+  }
+}
+async function generatePV(){
+  const type = document.getElementById('pvType').value;
+  const facts = document.getElementById('pvFacts').value.trim();
+  const resultBox = document.getElementById('pvResult');
+  if(!facts){ toast('Décris les faits avant de générer le PV'); return; }
+  resultBox.className = 'scan-result valid';
+  resultBox.innerHTML = '<div class="sr-label">⏳ Vérification biométrique requise…</div>';
+  try{
+    await verifyFingerprintSilent();
+  }catch(err){
+    resultBox.className = 'scan-result invalid';
+    resultBox.innerHTML = '<div class="sr-label">❌ PV non généré</div><div class="sr-meta">Vérification biométrique échouée : '+err.message+'</div>';
+    toast('Empreinte requise pour générer le PV', 4500);
+    return;
+  }
+  const now = new Date().toLocaleString('fr-FR');
+  const pvText = 'PROCÈS-VERBAL DE SIGNALEMENT\nDate : '+now+'\nType d\'infraction : '+type+'\nFaits constatés : '+facts+'\nAuthentifié par vérification biométrique (WebAuthn) sur cet appareil.';
+  const hash = await sha256Hex(pvText);
+  resultBox.className = 'scan-result valid';
+  resultBox.innerHTML = '<div class="sr-label">✅ PV généré et authentifié</div><div class="sr-meta">'+pvText.replace(/\n/g,'<br>')+'<br><br>Empreinte du document : '+hash.slice(0,24)+'…</div>';
+  lastPV = { type, facts, hash, timestamp: now };
+  logAudit('PV de signalement généré : ' + type, true);
+  toast('PV généré. Clique "Envoyer à AbaFusion" pour le transmettre.');
+}
+async function sendLastPVToAbaFusion(){
+  if(!lastPV){ toast('Génère d\'abord un PV'); return; }
+  await syncToAbaFusion('pv_signalement', lastPV);
+  toast('PV envoyé à AbaFusion');
+}
+function renderBlockchain(){
+  const box = document.getElementById('blockchainLedger');
+  if(!box) return;
+  const chain = loadChain();
+  box.innerHTML = chain.length ? chain.slice().reverse().map(b=>
+    '<div class="audit-row" style="flex-direction:column;align-items:flex-start;gap:3px"><span class="a-cmd">Bloc n°'+b.index+' — '+b.desc+'</span>'
+    + '<span class="a-time">Hash : '+b.hash.slice(0,20)+'… · Précédent : '+b.prevHash.slice(0,12)+'… · '+new Date(b.timestamp).toLocaleString('fr-FR')+'</span></div>'
+  ).join('') : '<div class="empty-note">Aucun bloc pour l\'instant — génère une preuve dans l\'onglet Droit & Preuves.</div>';
+}
+
 async function sendSecuredDocToAbaFusion(){
   const hash = document.getElementById('cryptoHashResult').textContent;
   const cipher = document.getElementById('cryptoCipherResult').value;
